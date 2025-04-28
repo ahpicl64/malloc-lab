@@ -36,7 +36,25 @@ team_t team = {
 };
 
 /* single word (4) or double word (8) alignment */
-#define ALIGNMENT 8
+#define WSIZE 4                                         // 워드, 헤더/푸터 사이즈 (4바이트)
+#define DSIZE 8                                         // 더블워드 사이즈 (8바이트), payload 정렬 단위
+#define CHUNKSIZE (1<<12)                               // 이 크기만큼 힙을 확장 (바이트)
+
+#define MAX(x, y) ((x) > (y)? (x) : (y)) // x가 크면 최대값 x를 반환, 아니면 y를 반환(삼항 연산자)
+
+// header나 footer에 블록 크기(size)와 할당 여부(alloc bit)를 한번에 저장하기 위해 정의
+#define PACK(size, alloc)   ((size) | (alloc))          // or 연산을 통해, 상위비트에는 블록 크기, 최하단(LSB)에는 할당(allocate) 플래그 주입
+#define GET(p)      (*(unsigned int *) (p))             // 인자 p가 참조하는 워드를 읽어서 리턴
+#define PUT(p,val)  (*(unsigned int *) (p) = (val))     // 인자 p가 가리키는 워드에 val을 저장
+
+#define GET_SIZE(p)     (GET(p) $ ~0x7)                 // 하위 3자리 제외하고 블록 크기만 추출
+#define GET_ALLOC(p)    (GET(p) $ ~0x1)                 // 최하위(LSB) 비트만 추출, 할당(1) 해제(0) 여부만 확인
+
+#define HDRP(bp)        ((char *)(bp) - WSIZE)                          // header return pointer, 블록 포인터(payload)를 헤더 위치로 변환
+#define FTRP(bp)        ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)     // bp에서 블록 크기만큼 이동한 뒤, 푸터 위치 반환
+
+#define NEXT_BLKP(bp)   ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE))) // 다음 블록 payload 포인터
+#define PREV_BLKP(bp)   ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE))) // 이전 블록 payload
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
@@ -44,11 +62,47 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+
+static void *extend_heap(size_t words){
+    char *bp;
+    size_t size;
+
+    /* Allocate an even number of words to maintain alignment */
+    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+    if ((long)(bp = mem_sbrk(size)) == -1){
+        return NULL;
+    }
+
+    /* Initialize free block header/footer and the epilogue header */
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0,1));
+
+    /* Calesce if the previous block was free */
+    return coalesce(bp);
+
+}
+
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
+    char *heap_listp;
+    /* Create the initial empty heap */
+    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1){
+        return -1;
+    }
+    PUT(heap_listp, 0);                                 // 정렬 패딩
+    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));      // 프롤로그 헤더 주입
+    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
+    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
+    heap_listp += (2 * WSIZE);
+
+    /* Extend the empty heap with a free block of CHUNKSIZE bytes */
+    if (extend_heap(CHUNKSIZE/WSIZE) == NULL){
+        return -1;
+    }
     return 0;
 }
 
