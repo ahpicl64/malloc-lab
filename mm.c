@@ -48,7 +48,7 @@ team_t team = {
 #define PUT(p,val)  (*(unsigned int *) (p) = (val))     // 인자 p가 가리키는 워드에 val을 저장
 
 #define GET_SIZE(p)     (GET(p) & ~0x7)                 // 하위 3자리 제외하고 블록 크기만 추출
-#define GET_ALLOC(p)    (GET(p) & ~0x1)                 // 최하위(LSB) 비트만 추출, 할당(1) 해제(0) 여부만 확인
+#define GET_ALLOC(p)    (GET(p) & 0x1)                 // 최하위(LSB) 비트만 추출, 할당(1) 해제(0) 여부만 확인
 
 #define HDRP(bp)        ((char *)(bp) - WSIZE)                          // header return pointer, 블록 포인터(payload)를 헤더 위치로 변환
 #define FTRP(bp)        ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)     // bp에서 블록 크기만큼 이동한 뒤, 푸터 위치 반환
@@ -56,15 +56,21 @@ team_t team = {
 #define NEXT_BLKP(bp)   ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE))) // 다음 블록 payload 포인터
 #define PREV_BLKP(bp)   ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE))) // 이전 블록 payload
 
+
+/* single word (4) or double word (8) alignment */
+#define ALIGNMENT 8
+
 /* rounds up to the nearest multiple of ALIGNMENT */
-// #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+static char *heap_listp;
+
 static void *coalesce(void *bp){
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    size_t next_alloc = GET_ALLOC(FTRP(NEXT_BLKP(bp)));
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
     if (prev_alloc && next_alloc) {             /* Case 1 */
@@ -119,7 +125,6 @@ static void *extend_heap(size_t words){
  */
 int mm_init(void)
 {
-    char *heap_listp;
     /* Create the initial empty heap */
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1){
         return -1;
@@ -221,7 +226,7 @@ void *mm_realloc(void *ptr, size_t size)
     newptr = mm_malloc(size);
     if (newptr == NULL)
       return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE;
     if (size < copySize)
       copySize = size;
     memcpy(newptr, oldptr, copySize);
